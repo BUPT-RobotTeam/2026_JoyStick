@@ -195,6 +195,7 @@ void ADC_Calibration(void)
 {
     uint16_t temp_values[4];
 
+
     // 初始化校准变量
     memset(calib_sum, 0, sizeof(calib_sum));
     calib_count = 0;
