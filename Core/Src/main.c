@@ -75,7 +75,7 @@ typedef struct {
     int16_t right_X;                // 右摇杆X轴
 } GamepadData_t;
 
-// 通信数据包结构体（带CRC32校验）
+// 通信数据包结构体
 typedef struct __attribute__((packed)) {
     char head;              // 包头，固定为'+'
     uint32_t id;            // 数据包序号（递增）
@@ -128,12 +128,14 @@ uint32_t Calculate_CRC32(const uint8_t *data, uint32_t length)
     return ~crc;  // 取反作为最终结果
 }
 
-//TIM6定时器中断每1s反转一下gpiopc13电平用于指示芯片正常工作
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+  //TIM6定时器中断每1s反转一下gpiopc13电平用于指示芯片正常工作
   if (htim->Instance == TIM6) {
     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_13);
   }
 
+  //TIM3定时器中断为1000hz，为按键消抖和adc数据提供时间基准
   if (htim->Instance == TIM3)
     {
         static uint32_t tick_1kHz = 0;
@@ -251,8 +253,6 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
 void ADC_Calibration(void)
 {
     uint16_t temp_values[4];
-
-
 
     // 初始化校准变量
     memset(calib_sum, 0, sizeof(calib_sum));
