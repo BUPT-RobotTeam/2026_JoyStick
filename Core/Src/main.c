@@ -66,7 +66,7 @@ uint16_t adc_offset[4] = {0}; // 4个通道的偏移值
 uint8_t calib_count = 0;     // 校准采样计数
 uint32_t calib_sum[4] = {0}; // 校准采样累加和
 
-// 统一数据包结构体
+// 统一数据包结构体（用于内部数据收集）
 typedef struct {
     uint8_t buttons[BUTTON_COUNT];  // 8个按钮状态
     int16_t left_Y;                 // 左摇杆Y轴
@@ -75,8 +75,20 @@ typedef struct {
     int16_t right_X;                // 右摇杆X轴
 } GamepadData_t;
 
+// 通信数据包结构体（带CRC32校验）
+typedef struct __attribute__((packed)) {
+    char head;              // 包头，固定为'+'
+    uint32_t id;            // 数据包序号（递增）
+    int16_t action[4];      // 摇杆数据：[left_Y, left_X, right_Y, right_X]
+    uint32_t button;        // 按钮状态（8位，每位代表一个按钮）
+    uint32_t reserve;       // 保留字段
+    uint32_t crc32;         // CRC32校验值
+    char tail;              // 包尾，固定为'*'
+} CommPacket_t;
+
 volatile GamepadData_t gamepad_data = {0}; // 手柄数据包
 volatile uint8_t adc_ready_flag = 0;       // ADC数据就绪标志
+static uint32_t packet_id = 0;             // 数据包序号
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,7 +100,33 @@ void ADC_Calibration(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 uint16_t values[4];
-char message[80] = "";  // 增加buffer大小以容纳统一数据包
+char message[80] = "";  
+
+/**
+ * @brief  计算CRC32校验值（使用标准CRC-32算法）
+ * @param  data: 待校验的数据指针
+ * @param  length: 数据长度（字节数）
+ * @retval CRC32校验值
+ */
+uint32_t Calculate_CRC32(const uint8_t *data, uint32_t length)
+{
+    uint32_t crc = 0xFFFFFFFF;  // 初始值
+    const uint32_t polynomial = 0x04C11DB7;  
+    
+    for (uint32_t i = 0; i < length; i++)
+    {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++)
+        {
+            if (crc & 1)
+                crc = (crc >> 1) ^ polynomial;
+            else
+                crc = crc >> 1;
+        }
+    }
+    
+    return ~crc;  // 取反作为最终结果
+}
 
 //TIM6定时器中断每1s反转一下gpiopc13电平用于指示芯片正常工作
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
@@ -108,7 +146,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             if (key_exti_flag[i])
             {
                 key_exti_flag[i] = 0;
-                debounce_cnt[i] = 15;  // 15 ms 后再采样
+                debounce_cnt[i] = 15; // 15 ms 后再采样
             }
       
             // 消抖计数
@@ -172,28 +210,48 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc){
     if (abs(right_Y) < 7) right_Y = 0;
     if (abs(right_X) < 7) right_X = 0;
 
-    // 更新摇杆数据
     gamepad_data.left_Y = left_Y;
     gamepad_data.left_X = left_X;
     gamepad_data.right_Y = right_Y;
     gamepad_data.right_X = right_X;
     
-    // 组合发送统一数据包
-    sprintf(message,"B:%d%d%d%d%d%d%d%d,A:%d,%d,%d,%d\n", 
-            gamepad_data.buttons[0], gamepad_data.buttons[1],
-            gamepad_data.buttons[2], gamepad_data.buttons[3],
-            gamepad_data.buttons[4], gamepad_data.buttons[5],
-            gamepad_data.buttons[6], gamepad_data.buttons[7],
-            gamepad_data.left_Y, gamepad_data.left_X,
-            gamepad_data.right_Y, gamepad_data.right_X);
+    // 组装新的通信数据包
+    CommPacket_t packet;
+    packet.head = '+';  // 包头
+    packet.id = packet_id++;  // 数据包序号
     
-    HAL_UART_Transmit_DMA(&huart3,(uint8_t*)message,strlen(message));
+    // 摇杆数据
+    packet.action[0] = gamepad_data.left_Y;
+    packet.action[1] = gamepad_data.left_X;
+    packet.action[2] = gamepad_data.right_Y;
+    packet.action[3] = gamepad_data.right_X;
+    
+    // 按钮状态（将8个按钮状态压缩到一个uint32_t中）
+    packet.button = 0;
+    for (uint8_t i = 0; i < BUTTON_COUNT; i++)
+    {
+        if (gamepad_data.buttons[i])
+            packet.button |= (1 << i);
+    }
+    
+    packet.reserve = 0;  // 保留字段
+    
+    // 计算CRC32（从id到button的所有字段）
+    uint8_t *crc_data = (uint8_t*)&packet.id;
+    uint32_t crc_length = sizeof(packet.id) + sizeof(packet.action) + sizeof(packet.button);
+    packet.crc32 = Calculate_CRC32(crc_data, crc_length);
+    
+    packet.tail = '*';  // 包尾
+    
+    // 通过UART发送数据包
+    HAL_UART_Transmit_DMA(&huart3, (uint8_t*)&packet, sizeof(CommPacket_t));
   }
 }
 
 void ADC_Calibration(void)
 {
     uint16_t temp_values[4];
+
 
 
     // 初始化校准变量
