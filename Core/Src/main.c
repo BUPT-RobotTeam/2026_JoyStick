@@ -110,22 +110,20 @@ char message[80] = "";
  */
 uint32_t Calculate_CRC32(const uint8_t *data, uint32_t length)
 {
-    uint32_t crc = 0xFFFFFFFF;  // 初始值
-    const uint32_t polynomial = 0x04C11DB7;  
-    
-    for (uint32_t i = 0; i < length; i++)
+    uint8_t i;
+    uint32_t crc = 0xffffffff;        // Initial value
+    while(length--)
     {
-        crc ^= data[i];
-        for (uint8_t j = 0; j < 8; j++)
+        crc ^= *data++;
+        for (i = 0; i < 8; ++i)
         {
             if (crc & 1)
-                crc = (crc >> 1) ^ polynomial;
+                crc = (crc >> 1) ^ 0xEDB88320; // 0xEDB88320= reverse 0x04C11DB7
             else
-                crc = crc >> 1;
+                crc = (crc >> 1);
         }
     }
-    
-    return ~crc;  // 取反作为最终结果
+    return ~crc;
 }
 
 
